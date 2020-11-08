@@ -21,16 +21,6 @@ impl GameState{
     }
 }
 
-// Original points:
-// 20 points per line (sometimes it's 19 - no idea why).
-// if previous move was a line +9 points extra (streak)
-// 2 lines / line + block at once = 37
-// 3 lines = ???
-
-// Points here (simplified):
-// 20 points per line
-// if previous move was a line +10 points extra (streak)
-
 fn print_board(board: &Board) {
     let mut row_counter = 0;
     println!("  abc def ghi");
@@ -206,6 +196,25 @@ fn read_user_move(game_state: &GameState) -> Move {
     }
 }
 
+fn newly_filled_cells_count(new_board: &Board, old_board: &Board) -> i32 {
+    let mut ret = 0;
+    for x in 0..9 {
+        for y in 0..9 {
+            ret = ret + if new_board[y][x] && !old_board[y][x] {
+                1
+            } else {
+                0
+            }
+        }
+    }
+
+    ret
+}
+
+// Points:
+// 18 points per line
+// 1 point for each cell that is filled after current move, that wasn't filled before current move
+// if previous move was a line +9 points extra (streak)
 
 fn perform_move(game_state: &GameState, m: &Move) -> GameState {
     assert!(m.brick_index >= 0);
@@ -219,10 +228,12 @@ fn perform_move(game_state: &GameState, m: &Move) -> GameState {
 
     let streak = game_state.last_move_was_match && resolve_result.blocks_removed > 0;
     let streak_points = if streak { 9 } else { 0 };
+    let new_cells_points = newly_filled_cells_count(&board, &game_state.board);
+    let bonus_points = resolve_result.blocks_removed * 18 + streak_points + new_cells_points;
 
     GameState {
         board,
-        points: game_state.points + resolve_result.blocks_removed * 20 + streak_points,
+        points: game_state.points + bonus_points,
         last_move_was_match: resolve_result.blocks_removed > 0,
         available_bricks,
     }
@@ -252,5 +263,4 @@ fn main() {
         println!("executing move: {:?}", &user_move);
         game_state = perform_move(&game_state, &user_move);
     }
-    // println!("possible moves: {:#?}", possible_moves(&game_state.board, &game_state.available_bricks[0]));
 }

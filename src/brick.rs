@@ -187,6 +187,19 @@ fn generate_brick_library() -> Vec<Brick> {
         offsets: vec![xy(0, 0), xy(1, 0), xy(1, 1), xy(2, 1)],
     };
 
+    // X
+    //  X
+    let brick_11 = Brick {
+        offsets: vec![xy(0, 0), xy(1, 1)],
+    };
+
+    // X
+    //  X
+    //   X
+    let brick_12 = Brick {
+        offsets: vec![xy(0, 0), xy(1, 1), xy(2, 2)],
+    };
+
     let mut ret = vec![];
     ret.extend(all_brick_rotations(&brick_0));
     ret.extend(all_brick_rotations(&brick_1));
@@ -199,6 +212,8 @@ fn generate_brick_library() -> Vec<Brick> {
     ret.extend(all_brick_rotations(&brick_8));
     ret.extend(all_brick_rotations(&brick_9));
     ret.extend(all_brick_rotations(&brick_10));
+    ret.extend(all_brick_rotations(&brick_11));
+    ret.extend(all_brick_rotations(&brick_12));
 
     ret
 }

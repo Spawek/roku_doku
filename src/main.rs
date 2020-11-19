@@ -2,6 +2,14 @@ use roku_doku::brick::{print_brick, random_brick, xy, Brick, XY};
 use roku_doku::resolve::resolve_board;
 use roku_doku::Board;
 use rand::{thread_rng, Rng};
+use std::time::Instant;
+use rayon::prelude::*;
+use global_counter::generic::Counter;
+use global_counter::primitive::exact::CounterI32;
+
+static PUT_BRICK_COUNTER : CounterI32 = CounterI32::new(0);
+static CAN_PUT_BRICK_COUNTER : CounterI32 = CounterI32::new(0);
+static POSSIBLE_MOVES_COUNTER : CounterI32 = CounterI32::new(0);
 
 #[derive(Debug, Clone)]
 struct GameState {
@@ -71,6 +79,8 @@ fn print_game_state(game_state: &GameState) {
 }
 
 fn can_put_brick(board: &Board, brick: &Brick, pos: &XY) -> bool {
+    CAN_PUT_BRICK_COUNTER.inc();
+
     assert!(pos.x >= 0);
     assert!(pos.y >= 0);
 
@@ -82,6 +92,7 @@ fn can_put_brick(board: &Board, brick: &Brick, pos: &XY) -> bool {
 
     let max_x = brick.offsets.iter().max_by_key(|v| v.x).unwrap().x;
     let max_y = brick.offsets.iter().max_by_key(|v| v.y).unwrap().y;
+    
     if pos.x + max_x > 8 || pos.y + max_y > 8 {
         return false;
     }
@@ -96,6 +107,8 @@ fn can_put_brick(board: &Board, brick: &Brick, pos: &XY) -> bool {
 }
 
 fn put_brick(board: &Board, brick: &Brick, pos: &XY) -> Board {
+    PUT_BRICK_COUNTER.inc();
+
     // assert!(can_put_brick(&board, &brick, &pos));
     // DEBUG
     if !can_put_brick(&board, &brick, &pos){
@@ -115,6 +128,8 @@ fn put_brick(board: &Board, brick: &Brick, pos: &XY) -> Board {
 }
 
 fn possible_moves(board: &Board, brick: &Brick) -> Vec<XY> {
+    POSSIBLE_MOVES_COUNTER.inc();
+
     let mut ret = vec![];
     for x in 0..9 {
         for y in 0..9 {
@@ -315,41 +330,85 @@ fn count_filled_cells(board: &Board) -> i32 {
         .sum()
 }
 
-// tests avg score on 100 games:
-// random move: 74
-// min brick_index, then min x, then min y: 182
-// do move which gives the most points: 458
-// do 3 moves which gives the most points: 1858
-// do 3 moves which gives the most points + subtract 2 points for each filled cell:
-fn ai_move(game_state: &GameState) -> PossibleMoveScore {
-    let mut possible_moves = vec![];
-    for m in get_possible_moves(game_state) {
-        let s = perform_move(&game_state, &m.clone().into());
-        if s.available_bricks.is_empty(){
-            possible_moves.push(PossibleMoveScore{
-                possible_move: m.clone(),
-                score: s.points - count_filled_cells(&s.board) * 2});
-            continue;
+// 6 in line -> +1 point
+// 7 in line -> +2 points
+// 8 in line -> +3 points
+fn find_almost_full_lines(board: &Board) -> i32 {
+    let mut bonus_points = 0;
+    for x in 0..9{
+        let mut count = 0;
+        for y in 0..9{
+            if board[y][x] {
+                count = count + 1;
+                if count > 5 {
+                    bonus_points = bonus_points + 1
+                }
+            }
         }
-
-        let moves2 = get_possible_moves(&s);
-        if moves2.is_empty() {
-            possible_moves.push(PossibleMoveScore{possible_move: m.clone(), score: s.points - 1000});
-            continue;
-        }
-
-        let best_sub_move = ai_move(&s);
-        possible_moves.push(PossibleMoveScore{possible_move: m.clone(), score: best_sub_move.score});
     }
 
-    possible_moves.into_iter().max_by_key(|x| x.score).unwrap()
+    for y in 0..9{
+        let mut count = 0;
+        for x in 0..9{
+            if board[y][x] {
+                count = count + 1;
+                if count > 5 {
+                    bonus_points = bonus_points + 1
+                }
+            }
+        }
+    }
+
+    bonus_points
+}
+
+fn ai_submove(game_state: &GameState, m: &PossibleMove) -> PossibleMoveScore {
+    let s = perform_move(&game_state, &m.clone().into());
+    if s.available_bricks.is_empty(){
+        return PossibleMoveScore{
+            possible_move: m.clone(),
+            score: s.points
+                - count_filled_cells(&s.board) * 1
+                + find_almost_full_lines(&s.board) * 2
+        };
+    }
+
+    let moves = get_possible_moves(&s);
+    if moves.is_empty() {
+        return PossibleMoveScore{possible_move: m.clone(), score: s.points - 1000};
+    }
+
+    let best_sub_move = ai_move(&s);
+    PossibleMoveScore{possible_move: m.clone(), score: best_sub_move.score}
+}
+
+// tests avg score on 100 games:
+// 1) random move: 74
+// 2) min brick_index, then min x, then min y: 182
+// 3 )do move which gives the most points: 458
+// 4 )do 3 moves which gives the most points: 1858
+// 5) 4) + subtract 2 points for each filled cell: 1744
+// 6) 4) + subtract 1 points for each filled cell: 1807
+// 7) 4) : 1680
+// 8) 7) + bonus points for "almost full lines": 6089
+// Added missing bricks (brick_11 and brick)12) in this point
+// 8) 7) + bonus points for "almost full lines" * 2:
+fn ai_move(game_state: &GameState) -> PossibleMoveScore {
+    let moves = get_possible_moves(game_state);
+    moves
+        .par_iter()
+        // .iter() // to use single thread
+        .map(|m| ai_submove(&game_state, &m))
+        .max_by_key(|x| x.score)
+        .unwrap()
 }
 
 fn main() {
     // print_all_bricks();
 
     let mut scores = vec![];
-    for _ in 0..100 {
+    let start = Instant::now();
+    for _ in 0..1{ // 00 {
         let mut move_counter = 0;
         let mut game_state = GameState::new();
         loop {
@@ -384,11 +443,17 @@ fn main() {
             }
         }
     }
+    let duration = start.elapsed();
 
     println!("final scores: {:#?}", scores);
     println!("min score: {:#?}", scores.iter().min().unwrap());
     println!("max score: {:#?}", scores.iter().max().unwrap());
     println!("avg score: {:#?}", scores.iter().sum::<i32>() / scores.len() as i32);
+    println!("Time elapsed: {:?}s", duration);
+
+    println!("PUT_BRICK_COUNTER: {} ({} per second)", PUT_BRICK_COUNTER.get(), PUT_BRICK_COUNTER.get() as u64 / duration.as_secs());
+    println!("CAN_PUT_BRICK_COUNTER: {} ({} per second)", CAN_PUT_BRICK_COUNTER.get(), CAN_PUT_BRICK_COUNTER.get() as u64 / duration.as_secs());
+    println!("POSSIBLE_MOVES_COUNTER: {} ({} per second)", POSSIBLE_MOVES_COUNTER.get(), POSSIBLE_MOVES_COUNTER.get() as u64 / duration.as_secs());
 }
 
 // TODO: write some macro to disable printing (as it takes a lot of time)
